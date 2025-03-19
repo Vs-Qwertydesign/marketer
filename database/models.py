@@ -49,7 +49,7 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     completion_percentage = Column(Float, default=0.0)
-    metadata = Column(JSON, nullable=True)
+    project_metadata = Column(JSON, nullable=True)
     
     # Связи с другими таблицами
     user = relationship("User", back_populates="projects")
@@ -60,10 +60,10 @@ class Project(Base):
         return f"<Project {self.name}>"
     
     def set_metadata(self, data):
-        self.metadata = json.dumps(data)
+        self.project_metadata = json.dumps(data)
     
     def get_metadata(self):
-        return json.loads(self.metadata) if self.metadata else {}
+        return json.loads(self.project_metadata) if self.project_metadata else {}
 
 # Задачи проекта
 class Task(Base):
@@ -130,7 +130,7 @@ class Message(Base):
     sender_type = Column(String(20), nullable=False)  # user, bot
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.now)
-    metadata = Column(JSON, nullable=True)  # для хранения дополнительных данных
+    message_metadata = Column(JSON, nullable=True)  # для хранения дополнительных данных
     
     # Связи с другими таблицами
     conversation = relationship("Conversation", back_populates="messages")
@@ -139,10 +139,10 @@ class Message(Base):
         return f"<Message {self.id}>"
     
     def set_metadata(self, data):
-        self.metadata = json.dumps(data)
+        self.message_metadata = json.dumps(data)
     
     def get_metadata(self):
-        return json.loads(self.metadata) if self.metadata else {}
+        return json.loads(self.message_metadata) if self.message_metadata else {}
 
 # Функция для инициализации базы данных
 def init_db():

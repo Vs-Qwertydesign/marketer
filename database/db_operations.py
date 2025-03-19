@@ -369,7 +369,7 @@ def get_active_conversation(user_id: int, project_id: int = None) -> Optional[Co
     # Строим базовый запрос
     query = select(Conversation).where(
         (Conversation.user_id == user_id) & 
-        (Conversation.status == "active")
+        (Conversation.is_active == True)
     )
     
     # Если указан ID проекта, добавляем условие

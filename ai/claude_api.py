@@ -4,11 +4,15 @@ import os
 import base64
 import mimetypes
 from typing import List, Dict, Optional, Union, Any
+import httpx
+import logging
+import json
 
 # Добавляем корневую директорию проекта в sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_TOKENS_RESPONSE
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_TOKENS_RESPONSE, GEMINI_API_KEY
+from ai.gemini_api import get_text_response as gemini_get_text_response
 
 # Инициализация клиента Claude
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -37,169 +41,230 @@ def create_image_content(image_path: str) -> Dict[str, Any]:
         }
     }
 
-def get_text_response(prompt: str, system_prompt: Optional[str] = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
+def get_text_response(user_message: str, system_prompt: str = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
     """
-    Получает текстовый ответ от Claude по текстовому запросу
+    Получает ответ от модели Claude на текстовый запрос
     
     Args:
-        prompt: Текст запроса
-        system_prompt: Системный промпт (инструкции для модели)
+        user_message: Сообщение пользователя
+        system_prompt: Системный промпт для модели (опционально)
         max_tokens: Максимальное количество токенов в ответе
         
     Returns:
-        Текстовый ответ от модели
+        Ответ модели
     """
     try:
-        message = client.messages.create(
+        # Если system_prompt не указан, используем дефолтное значение
+        if not system_prompt:
+            system_prompt = "Вы полезный ассистент, который отвечает на вопросы пользователя. Ваши ответы должны быть информативными и точными."
+        
+        # Создаем сообщение
+        response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            system=system_prompt
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}]
         )
-        return message.content[0].text
+        
+        # Возвращаем текст ответа
+        return response.content[0].text
     except Exception as e:
-        print(f"Ошибка при получении ответа от Claude: {e}")
-        return f"Ошибка при получении ответа от нейросети: {e}"
+        logging.error(f"Ошибка при получении ответа от Claude: {e}")
+        
+        # Если произошла ошибка, пробуем использовать Gemini API
+        try:
+            logging.info("Пробуем использовать Gemini API для получения ответа")
+            gemini_response = gemini_get_text_response(user_message, system_prompt)
+            return gemini_response
+        except Exception as gemini_error:
+            logging.error(f"Ошибка при использовании Gemini API: {gemini_error}")
+            return f"Произошла ошибка при обработке вашего запроса: {e}"
 
-def get_response_with_images(prompt: str, image_paths: List[str], system_prompt: Optional[str] = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
+def get_response_with_images(user_message: str, image_paths: List[str], system_prompt: str = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
     """
-    Получает ответ от Claude по текстовому запросу с изображениями
+    Получает ответ от модели Claude на запрос с изображениями
     
     Args:
-        prompt: Текст запроса
+        user_message: Сообщение пользователя
         image_paths: Список путей к изображениям
-        system_prompt: Системный промпт (инструкции для модели)
+        system_prompt: Системный промпт для модели (опционально)
         max_tokens: Максимальное количество токенов в ответе
         
     Returns:
-        Текстовый ответ от модели
+        Ответ модели
     """
     try:
-        # Подготовка контента с изображениями
-        content = []
+        # Если system_prompt не указан, используем дефолтное значение
+        if not system_prompt:
+            system_prompt = "Вы полезный ассистент, который анализирует изображения и отвечает на вопросы пользователя. Ваши ответы должны быть информативными и точными."
+        
+        # Создаем сообщение
+        messages = [{"role": "user", "content": [{"type": "text", "text": user_message}]}]
         
         # Добавляем изображения
         for image_path in image_paths:
-            content.append(create_image_content(image_path))
-        
-        # Добавляем текст запроса
-        content.append({"type": "text", "text": prompt})
+            with open(image_path, "rb") as f:
+                image_data = f.read()
+            
+            # Добавляем изображение в сообщение
+            messages[0]["content"].append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": image_data.hex()
+                }
+            })
         
         # Отправляем запрос
-        message = client.messages.create(
+        response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
-            messages=[
-                {"role": "user", "content": content}
-            ],
-            system=system_prompt
+            system=system_prompt,
+            messages=messages
         )
-        return message.content[0].text
+        
+        # Возвращаем текст ответа
+        return response.content[0].text
     except Exception as e:
-        print(f"Ошибка при получении ответа от Claude: {e}")
-        return f"Ошибка при получении ответа от нейросети: {e}"
+        logging.error(f"Ошибка при получении ответа с изображениями от Claude: {e}")
+        
+        # Если произошла ошибка, пробуем использовать Gemini API
+        try:
+            logging.info("Пробуем использовать Gemini API для анализа изображений")
+            from ai.gemini_api import analyze_image
+            # Используем первое изображение для анализа (если есть)
+            if image_paths:
+                gemini_response = analyze_image(image_paths[0], user_message)
+                return gemini_response
+            else:
+                return f"Произошла ошибка при обработке изображений: {e}"
+        except Exception as gemini_error:
+            logging.error(f"Ошибка при использовании Gemini API для изображений: {gemini_error}")
+            return f"Произошла ошибка при обработке вашего запроса с изображениями: {e}"
 
-def analyze_document(document_text: str, question: Optional[str] = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
+def analyze_document(text: str, question: Optional[str] = None) -> str:
     """
-    Анализирует текстовый документ с помощью Claude
+    Анализирует документ с помощью Claude
     
     Args:
-        document_text: Текст документа для анализа
+        text: Текст документа
         question: Вопрос о документе (опционально)
-        max_tokens: Максимальное количество токенов в ответе
         
     Returns:
-        Текстовый ответ от модели с анализом документа
+        Результат анализа
     """
     try:
-        prompt = f"Вот документ для анализа:\n\n{document_text}\n\n"
-        
+        # Подготавливаем промпт
         if question:
-            prompt += f"Вопрос: {question}"
+            prompt = f"Вот документ для анализа:\n\n{text}\n\nВопрос: {question}\n\nПожалуйста, дайте подробный ответ на вопрос на основе содержимого документа."
         else:
-            prompt += "Пожалуйста, проанализируйте этот документ, выделите основные идеи, ключевые моменты и предоставьте краткое резюме."
+            prompt = f"Вот документ для анализа:\n\n{text}\n\nПожалуйста, проанализируйте его и выделите основные идеи, ключевые моменты и важные детали."
         
-        message = client.messages.create(
+        # Получаем ответ от модели
+        response = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            max_tokens=MAX_TOKENS_RESPONSE,
+            system="Вы эксперт по анализу документов. Ваша задача - анализировать документы и отвечать на вопросы о них.",
+            messages=[{"role": "user", "content": prompt}]
         )
-        return message.content[0].text
+        
+        # Возвращаем ответ
+        return response.content[0].text
     except Exception as e:
-        print(f"Ошибка при анализе документа: {e}")
-        return f"Ошибка при анализе документа: {e}"
+        logging.error(f"Ошибка при анализе документа: {e}")
+        
+        # Если произошла ошибка, пробуем использовать Gemini API
+        try:
+            logging.info("Пробуем использовать Gemini API для анализа документа")
+            gemini_response = gemini_get_text_response(
+                f"Анализ документа:\n\n{text}\n\n{'Вопрос: ' + question if question else 'Проанализируйте документ и выделите основные идеи, ключевые моменты и важные детали.'}",
+                "Вы эксперт по анализу документов. Ваша задача - анализировать документы и отвечать на вопросы о них."
+            )
+            return gemini_response
+        except Exception as gemini_error:
+            logging.error(f"Ошибка при использовании Gemini API для анализа документа: {gemini_error}")
+            return f"Произошла ошибка при анализе документа: {e}"
 
-def generate_project_ideas(field: str, goals: str, constraints: Optional[str] = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
+def generate_project_ideas(field: str, goals: str, constraints: Optional[str] = None) -> str:
     """
-    Генерирует идеи для маркетингового проекта
+    Генерирует идеи для проекта с помощью Claude
     
     Args:
-        field: Область маркетинга или ниша
+        field: Область проекта
         goals: Цели проекта
         constraints: Ограничения проекта (опционально)
-        max_tokens: Максимальное количество токенов в ответе
         
     Returns:
-        Текстовый ответ от модели с идеями для проекта
+        Сгенерированные идеи
     """
     try:
-        system_prompt = "Вы опытный маркетолог-стратег с большим опытом работы в различных нишах. Ваша задача - генерировать креативные и эффективные идеи для маркетинговых проектов."
-        
-        prompt = f"Предложите идеи для маркетингового проекта в области {field}.\n\nЦели проекта: {goals}"
-        
+        # Подготавливаем промпт
         if constraints:
-            prompt += f"\n\nОграничения: {constraints}"
+            prompt = f"Генерация идей для проекта в области: {field}.\n\nЦели проекта: {goals}.\n\nОграничения: {constraints}.\n\nПредложите 5-7 креативных и практичных идей для маркетингового проекта, учитывая указанные цели и ограничения."
+        else:
+            prompt = f"Генерация идей для проекта в области: {field}.\n\nЦели проекта: {goals}.\n\nПредложите 5-7 креативных и практичных идей для маркетингового проекта, учитывая указанные цели."
         
-        prompt += "\n\nПожалуйста, предложите 3-5 конкретных и реализуемых идей. Для каждой идеи укажите:\n1. Краткое описание\n2. Потенциальные результаты\n3. Ресурсы, необходимые для реализации\n4. Примерные сроки\n5. Риски и как их минимизировать"
-        
-        message = client.messages.create(
+        # Получаем ответ от модели
+        response = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            system=system_prompt
+            max_tokens=MAX_TOKENS_RESPONSE,
+            system="Вы креативный маркетолог с опытом генерации идей для проектов в различных областях. Ваша задача - предложить креативные и практичные идеи для маркетинговых проектов, учитывая цели и ограничения.",
+            messages=[{"role": "user", "content": prompt}]
         )
-        return message.content[0].text
+        
+        # Возвращаем ответ
+        return response.content[0].text
     except Exception as e:
-        print(f"Ошибка при генерации идей для проекта: {e}")
-        return f"Ошибка при генерации идей для проекта: {e}"
+        logging.error(f"Ошибка при генерации идей для проекта: {e}")
+        
+        # Если произошла ошибка, пробуем использовать Gemini API
+        try:
+            logging.info("Пробуем использовать Gemini API для генерации идей")
+            gemini_response = gemini_get_text_response(
+                prompt,
+                "Вы креативный маркетолог с опытом генерации идей для проектов в различных областях. Ваша задача - предложить креативные и практичные идеи для маркетинговых проектов, учитывая цели и ограничения."
+            )
+            return gemini_response
+        except Exception as gemini_error:
+            logging.error(f"Ошибка при использовании Gemini API для генерации идей: {gemini_error}")
+            return f"Произошла ошибка при генерации идей для проекта: {e}"
 
-def analyze_market_trends(industry: str, question: Optional[str] = None, max_tokens: int = MAX_TOKENS_RESPONSE) -> str:
+def analyze_market_trends(industry: str) -> str:
     """
-    Анализирует тренды рынка в указанной отрасли
+    Анализирует рыночные тренды в указанной отрасли с помощью Claude
     
     Args:
         industry: Отрасль для анализа
-        question: Конкретный вопрос о тренде (опционально)
-        max_tokens: Максимальное количество токенов в ответе
         
     Returns:
-        Текстовый ответ от модели с анализом трендов
+        Результат анализа
     """
     try:
-        system_prompt = "Вы опытный аналитик рынка с глубоким пониманием различных отраслей. У вас есть знания о рыночных тенденциях до января 2023 года. Объясняйте тренды ясно и подробно."
+        # Подготавливаем промпт
+        prompt = f"Анализ рыночных трендов в отрасли: {industry}.\n\nПожалуйста, проанализируйте текущие тренды, тенденции и перспективы развития в этой отрасли. Включите информацию о ключевых игроках, инновациях, потребительских предпочтениях и прогнозах на ближайшие 1-2 года."
         
-        prompt = f"Проанализируйте текущие тренды в отрасли {industry}."
-        
-        if question:
-            prompt += f"\n\nКонкретно интересует следующий вопрос: {question}"
-        else:
-            prompt += "\n\nОпишите:\n1. Основные текущие тренды\n2. Потенциальные возможности для бизнеса\n3. Риски и вызовы\n4. Прогнозы на ближайшие 1-2 года"
-        
-        message = client.messages.create(
+        # Получаем ответ от модели
+        response = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            system=system_prompt
+            max_tokens=MAX_TOKENS_RESPONSE,
+            system="Вы эксперт по рыночным исследованиям и анализу трендов. Ваша задача - предоставить комплексный анализ трендов и тенденций в указанной отрасли, основываясь на ваших знаниях о рынке.",
+            messages=[{"role": "user", "content": prompt}]
         )
-        return message.content[0].text
+        
+        # Возвращаем ответ
+        return response.content[0].text
     except Exception as e:
-        print(f"Ошибка при анализе трендов рынка: {e}")
-        return f"Ошибка при анализе трендов рынка: {e}" 
+        logging.error(f"Ошибка при анализе трендов рынка: {e}")
+        
+        # Если произошла ошибка, пробуем использовать Gemini API
+        try:
+            logging.info("Пробуем использовать Gemini API для анализа рыночных трендов")
+            gemini_response = gemini_get_text_response(
+                prompt,
+                "Вы эксперт по рыночным исследованиям и анализу трендов. Ваша задача - предоставить комплексный анализ трендов и тенденций в указанной отрасли, основываясь на ваших знаниях о рынке."
+            )
+            return gemini_response
+        except Exception as gemini_error:
+            logging.error(f"Ошибка при использовании Gemini API для анализа трендов: {gemini_error}")
+            return f"Произошла ошибка при анализе трендов рынка: {e}" 
