@@ -1,0 +1,15 @@
+aiogram==3.2.0
+python-dotenv==1.0.0
+anthropic==0.8.1
+google-generativeai==0.3.2
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.27
+pydub==0.25.1
+bs4==0.0.1
+requests==2.31.0
+aiohttp==3.8.6
+pillow==10.2.0
+python-telegram-bot[job-queue]==20.7
+elevenlabs==0.2.24
+APScheduler==3.10.4
+yadisk==1.2.15 
